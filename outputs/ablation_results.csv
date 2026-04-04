@@ -1,0 +1,7 @@
+removed_group,auc_without,auc_delta,features_removed
+safe_POI,0.8304,-0.0401,"safe_poi_count_100m, safe_poi_count_300m, night_x_safe_poi"
+dead_end_flag,0.8451,-0.0255,dead_end_flag
+neutral_POI,0.856,-0.0146,"neutral_poi_count_100m, neutral_poi_count_300m"
+road_struct,0.8665,-0.004,"road_type_encoded, length_m"
+risky_POI,0.8681,-0.0025,"risky_poi_count_100m, risky_poi_count_300m, night_x_risky_poi"
+temporal,0.8682,-0.0023,"is_night, time_band, is_weekend, night_x_road, night_x_safe_poi, night_x_risky_poi"

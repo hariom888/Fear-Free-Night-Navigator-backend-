@@ -1,0 +1,31 @@
+# render.yaml — Fear-Free Night Navigator
+# Render reads this automatically when you connect your GitHub repo.
+
+services:
+  - type: web
+    name: fear-free-navigator
+    runtime: python
+    region: singapore
+    plan: free
+
+    # Render runs this once per deploy to install dependencies
+    buildCommand: pip install -r requirements.txt
+
+    # --skip-train: model + cache are committed to git, no retraining on Render
+    # Render automatically sets PORT and RENDER=true in the environment
+    startCommand: bash run.sh --skip-train
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
+      - key: AUTOPING_ENABLED
+        value: "true"         # keeps free tier warm, set false on paid plans
+
+      - key: RENDER
+        value: "true"         # tells run.sh to skip venv, use system Python
+      
+      # RENDER_EXTERNAL_URL is injected automatically by Render.
+      # AutoPing reads it to self-ping. Do NOT set it manually here.

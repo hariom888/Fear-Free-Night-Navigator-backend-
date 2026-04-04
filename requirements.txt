@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────
+# Fear-Free Night Navigator — Python dependencies
+# Install:  pip install -r requirements.txt
+# Python:   3.10+  (tested on 3.12)
+# ─────────────────────────────────────────────────────────────────
+
+# ── API server ────────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1          # includes uvloop + httptools
+pydantic==2.10.3
+
+# ── ML / numerics ────────────────────────────────────────────────
+scikit-learn==1.6.0
+numpy==1.26.4
+scipy==1.14.1
+joblib==1.4.2
+pandas==2.2.3
+
+# ── Visualisation (demo map only) ────────────────────────────────
+folium==0.19.2
+matplotlib==3.9.4
+
+# ── HTTP client (AutoPing keep-alive) ────────────────────────────
+httpx==0.28.1
+
+# ── Utilities ────────────────────────────────────────────────────
+python-multipart==0.0.20           # needed by FastAPI form handling
+
+# ── Road Safety Feedback API ──────────────────────────────────────────────────
+sqlalchemy==2.0.36            # ORM + SQLite (swap DATABASE_URL for Postgres/MySQL)
+python-multipart==0.0.20      # multipart form / file uploads (already listed above)

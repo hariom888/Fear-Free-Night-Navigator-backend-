@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+
+# Virtual environment — never commit
+.venv/
+venv/
+env/
+
+# ── LARGE DATA FILES — never commit these ─────────────────────────────────────
+# Training data (41 MB) — only needed locally for training, not at runtime
+data/edges_list.csv
+data/compressed_data_csv.gz
+data/edges_sample.csv
+
+# Large intermediate outputs — never needed in git
+outputs/css_cache.csv          # 37-302 MB CSV — commit the NPZ instead
+outputs/css_cache_full.csv     # 289 MB — never commit
+outputs/edges_with_coords.csv  # 5 MB intermediate
+
+# ── COMMIT THESE (small, needed at runtime) ───────────────────────────────────
+# data/adjacency_matrix.npz      1.8 MB  ← commit ✓
+# data/nodes_features.csv         24 MB  ← commit ✓
+# outputs/safety_model.pkl        0.7 MB ← commit ✓
+# outputs/css_cache.npz           ~5 MB  ← commit ✓  (run compress_cache.py first)
+
+# Optional plots/reports — don't need to be in git
+outputs/roc_curve.png
+outputs/feature_importance.png
+outputs/ablation_plot.png
+outputs/ablation_results.csv
+outputs/evaluation_report.md
+outputs/demo.html
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
