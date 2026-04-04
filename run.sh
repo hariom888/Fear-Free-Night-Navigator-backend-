@@ -3,7 +3,6 @@
 # run.sh — Fear-Free Night Navigator · Full Automation Script
 #
 # USAGE:
-#   chmod +x run.sh
 #   ./run.sh                   # train (80k sample) + start API
 #   ./run.sh --full            # train (full 393k dataset) + start API
 #   ./run.sh --skip-train      # skip training, start API immediately  ← Render
@@ -28,7 +27,7 @@ header()  { echo -e "\n${BOLD}${CYAN}══ $* ══${RESET}"; }
 FULL_TRAIN=false
 SKIP_TRAIN=false
 SKIP_ABLATION=false
-PORT="${PORT:-8000}"   # Render injects PORT automatically
+PORT="${PORT:-8000}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -52,7 +51,6 @@ info "Root: $SCRIPT_DIR  |  Port: $PORT"
 
 # ── Step 1: Python ─────────────────────────────────────────────────────────
 header "Step 1 · Python version"
-# Support pyenv if available
 if command -v pyenv &>/dev/null; then
   PYTHON=$(pyenv which python3 2>/dev/null || command -v python3)
 else
@@ -78,7 +76,6 @@ check_file() {
 check_file "$DATA_DIR/adjacency_matrix.npz"  "Sparse road graph"
 check_file "$DATA_DIR/nodes_features.csv"    "Node coordinates"
 
-# edges_list.csv only needed for training, not for API
 if [[ "$SKIP_TRAIN" == false ]]; then
   if [[ ! -f "$DATA_DIR/edges_list.csv" ]] && [[ ! -f "$DATA_DIR/compressed_data_csv.gz" ]]; then
     echo -e "${RED}[MISS]${RESET}  edges_list.csv (or compressed_data_csv.gz) — training data"
@@ -91,13 +88,11 @@ fi
 header "Step 3 · Virtual environment"
 VENV_DIR="$SCRIPT_DIR/.venv"
 
-# On Render, pip install already ran during build — skip venv creation
 if [[ "${RENDER:-}" == "true" ]]; then
   info "Running on Render — using system Python (build step installed deps)"
   PYTHON_BIN="python3"
   PIP_BIN="pip3"
 else
-  # Local: create/reuse venv
   if [[ -d "$VENV_DIR" ]]; then
     EXISTING_PY=$("$VENV_DIR/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "unknown")
     if [[ "$EXISTING_PY" != "$PY_VERSION" ]]; then
@@ -127,7 +122,6 @@ header "Step 4 · ML Training"
 if [[ "$SKIP_TRAIN" == true ]]; then
   warn "Skipping training (--skip-train)"
   MISSING_OUT=0
-  # Must have either NPZ or CSV cache, plus the model
   if [[ ! -f "$OUT_DIR/safety_model.pkl" ]]; then
     echo -e "${RED}[MISS]${RESET}  outputs/safety_model.pkl"; MISSING_OUT=$((MISSING_OUT+1))
   else
@@ -137,7 +131,6 @@ if [[ "$SKIP_TRAIN" == true ]]; then
     success "outputs/css_cache.npz  ($(du -sh "$OUT_DIR/css_cache.npz" | cut -f1))  ← fast path"
   elif [[ -f "$OUT_DIR/css_cache.csv" ]]; then
     warn "outputs/css_cache.csv found — consider converting to NPZ for faster startup"
-    warn "Run: python3 src/compress_cache.py"
   else
     echo -e "${RED}[MISS]${RESET}  outputs/css_cache.npz (or css_cache.csv)"; MISSING_OUT=$((MISSING_OUT+1))
   fi
@@ -151,19 +144,29 @@ else
   START_T=$SECONDS
   "$PYTHON_BIN" "$SRC_DIR/train_fast.py" $TRAIN_ARGS
   success "Training complete in $((SECONDS - START_T))s"
-  # Verify NPZ was produced
   [[ -f "$OUT_DIR/css_cache.npz" ]] && \
     success "css_cache.npz ready: $(du -sh "$OUT_DIR/css_cache.npz" | cut -f1)" || \
     warn "css_cache.npz not found — run: python3 src/compress_cache.py"
 fi
 
 # ── Step 5: Test suite ───────────────────────────────────────────────────────
+# NOTE: Tests are skipped on Render (--skip-train path) because:
+#   1. test_router.py loads the full CSS cache into a pandas DataFrame (~944 MB),
+#      which exceeds Render free tier's 512 MB RAM limit before uvicorn even starts.
+#   2. Tests already passed locally before committing outputs/ to git.
+#   3. The API's /health endpoint acts as a live smoke-test after startup.
 header "Step 5 · Test suite"
-info "Running 26 tests ..."
-if "$PYTHON_BIN" "$SCRIPT_DIR/tests/test_router.py"; then
-  success "All tests passed"
+
+if [[ "${RENDER:-}" == "true" ]] || [[ "$SKIP_TRAIN" == true ]]; then
+  warn "Skipping test suite on Render/skip-train (tests load full CSS cache into RAM)."
+  warn "Run tests locally with: python3 tests/test_router.py"
 else
-  error "Tests failed. Fix errors before starting the server."
+  info "Running tests locally ..."
+  if "$PYTHON_BIN" "$SCRIPT_DIR/tests/test_router.py"; then
+    success "All tests passed"
+  else
+    error "Tests failed. Fix errors before starting the server."
+  fi
 fi
 
 # ── Step 6: Start API ─────────────────────────────────────────────────────────
