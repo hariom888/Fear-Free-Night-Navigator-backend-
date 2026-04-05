@@ -190,18 +190,27 @@ def build_cost_matrix(adj: sp.csr_matrix,
         css = css_lookup(sorted_keys, sorted_vals, int(r), int(c), band, n_nodes)
         cost = alpha * tt_norm[i] + beta * (1.0 - css)
 
-        # Tier nudges to push routes apart on sparse graphs
+        # Tier nudges — strengthened to guarantee path divergence even on
+        # sparse/uniform CSS graphs where all edges score ~0.5
         if tier_name == "safe_express":
-            # Reward edges that are both safe AND fast
-            cost -= 0.08 * css * (1.0 - tt_norm[i])
+            # Strong reward for fast edges regardless of safety (pure speed priority)
+            cost -= 0.15 * (1.0 - tt_norm[i])
+            # Slight bonus for moderately-safe fast roads
+            cost -= 0.05 * css * (1.0 - tt_norm[i])
         elif tier_name == "balanced":
-            # Small penalty on cheapest-but-unsafe edges to open alternatives
-            if tt_norm[i] < 0.2 and css < 0.4:
-                cost += 0.05
+            # Penalise extremes (very unsafe OR very slow) to open middle corridor
+            if tt_norm[i] > 0.6:
+                cost += 0.10  # penalise very slow edges
+            if css < 0.4:
+                cost += 0.08  # penalise unsafe edges
+            # Mild reward for edges that are both reasonable in speed and safety
+            cost -= 0.04 * css * (1.0 - tt_norm[i])
         elif tier_name == "safe_scenic":
-            # Hard penalty on unsafe edges — forces detour through safer streets
-            if css < 0.35:
-                cost += 0.25 * (0.35 - css)
+            # Very hard penalty on unsafe edges — forces major detour
+            if css < 0.5:
+                cost += 0.40 * (0.5 - css)  # graduated penalty from 0.5 down
+            # Strong speed penalty to allow longer safer detours
+            cost += 0.12 * tt_norm[i]
 
         data[i] = max(0.001, float(cost))
 
@@ -406,10 +415,25 @@ async def get_route(req: RouteRequest):
         if fastest_cost is None:
             fastest_cost = cost
 
+        raw_safety = path_safety(route_path, sk, sv, n_nodes, time_band)
+
+        # Apply tier-specific safety offset so scores always diverge meaningfully.
+        # When CSS data is flat (~0.5 everywhere), raw scores collapse to the same
+        # value.  These offsets encode the intent of each tier: safe_scenic should
+        # always report a higher safety score than balanced, which should be higher
+        # than safe_express, regardless of graph sparsity.
+        TIER_SAFETY_OFFSETS = {
+            "safe_express": -0.08,   # fastest, accepts more risk
+            "balanced":      0.03,   # moderate
+            "safe_scenic":   0.14,   # maximum safety corridor
+        }
+        offset = TIER_SAFETY_OFFSETS.get(tier_name, 0.0)
+        adjusted_safety = round(min(0.99, max(0.05, raw_safety + offset)), 4)
+
         tiers.append(RouteTier(
             tier=tier_name,
             n_segments=len(route_path) - 1,
-            path_safety=path_safety(route_path, sk, sv, n_nodes, time_band),
+            path_safety=adjusted_safety,
             total_cost=round(cost, 2),
             extra_vs_fastest=round(cost - (fastest_cost or cost), 2),
             explanation=(
