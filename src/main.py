@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import httpx
 import numpy as np
@@ -126,6 +127,19 @@ def css_lookup(sorted_keys: np.ndarray, sorted_vals: np.ndarray,
 # ── Routing helpers ────────────────────────────────────────────────────────────
 def epoch_to_time_band(epoch: int) -> int:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).hour // 2
+
+
+def nearest_available_band(requested: int, available: np.ndarray) -> int:
+    """
+    FIX: Return the closest available time band to the requested one.
+    Prevents css_lookup from returning the default 0.5 for every edge
+    when the requested band has no data — which caused all three route
+    tiers to produce identical paths and safety scores.
+    """
+    if len(available) == 0:
+        return requested
+    idx = int(np.argmin(np.abs(available.astype(np.int32) - requested)))
+    return int(available[idx])
 
 
 def load_adjacency(path: Path) -> sp.csr_matrix:
@@ -264,6 +278,13 @@ async def lifespan(app: FastAPI):
     app.state.css_sorted_vals = sorted_vals
     app.state.n_nodes         = n_nodes
 
+    # FIX: store available time bands so /route can fall back to nearest band
+    # instead of silently returning css=0.5 for all edges (which makes all
+    # three tiers converge on the identical Dijkstra path).
+    available_bands = sorted(set(int(b) for b in tb))
+    app.state.available_bands = np.array(available_bands, dtype=np.int8)
+    log.info(f"[startup] CSS bands available: {available_bands}")
+
     # Compact edge_id lookup (for /safety/segment)
     eid_key = eid.astype(np.int64) * 12 + tb.astype(np.int64)
     eid_ord = np.argsort(eid_key, kind="stable")
@@ -346,7 +367,12 @@ async def get_route(req: RouteRequest):
     Compute 3 Pareto-optimal route tiers for origin -> destination.
     Tiers: safe_express / balanced / safe_scenic.
     """
-    time_band  = epoch_to_time_band(req.departure_epoch)
+    requested_band = epoch_to_time_band(req.departure_epoch)
+    # FIX: fall back to nearest available band so CSS lookup never returns
+    # all-0.5 defaults (which collapses all tiers onto the same path).
+    time_band  = nearest_available_band(requested_band, app.state.available_bands)
+    if time_band != requested_band:
+        log.warning(f"[route] Requested band {requested_band} has no CSS data — using nearest band {time_band}")
     sk         = app.state.css_sorted_keys
     sv         = app.state.css_sorted_vals
     n_nodes    = app.state.n_nodes
@@ -415,8 +441,47 @@ async def get_route(req: RouteRequest):
 
 
 @app.get("/safety/segment", response_model=SegmentSafetyResponse, tags=["safety"])
-async def segment_safety(edge_id: int, time_band: int = 10):
-    """CSS score for a single road segment at a given time band (0-11)."""
+async def segment_safety(
+    time_band: int = 10,
+    edge_id: Optional[int] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+):
+    """
+    CSS score for a single road segment at a given time band (0-11).
+
+    FIX: Now accepts either edge_id OR lat/lon coordinates.
+    The frontend previously hardcoded edge_id=0 for every segment click,
+    making all segments show the same score. It now passes the clicked
+    lat/lon so we find the nearest graph node and return its real score.
+    """
+    # FIX: nearest-band fallback so we never silently return a 404 for
+    # a valid time that simply has no pre-computed band entry.
+    time_band = int(nearest_available_band(time_band, app.state.available_bands))
+
+    if lat is not None and lon is not None:
+        # Lat/lon path: find nearest node, then look up its outgoing edge CSS
+        node_idx = nearest_node(app.state.nodes_xy, lat, lon)
+        sk = app.state.css_sorted_keys
+        sv = app.state.css_sorted_vals
+        n  = app.state.n_nodes
+        # Find best outgoing edge from this node for the given band
+        adj: sp.csr_matrix = app.state.adj
+        _, neighbors = adj[node_idx].nonzero()
+        if len(neighbors) == 0:
+            raise HTTPException(404, f"No edges found near lat={lat}, lon={lon}")
+        scores = [css_lookup(sk, sv, node_idx, int(nb), time_band, n) for nb in neighbors]
+        score = float(np.mean(scores))
+        return SegmentSafetyResponse(
+            edge_id=-1,
+            time_band=time_band,
+            css_score=round(score, 4),
+            is_safe=score >= 0.5,
+        )
+
+    if edge_id is None:
+        raise HTTPException(400, "Provide either edge_id or lat+lon query parameters.")
+
     k   = np.int64(edge_id) * 12 + time_band
     idx = np.searchsorted(app.state.eid_sorted_keys, k)
     if idx >= len(app.state.eid_sorted_keys) or app.state.eid_sorted_keys[idx] != k:
