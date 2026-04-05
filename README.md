@@ -1,4 +1,4 @@
-# Fear-Free Night Navigator 🌙
+# Fear-Free Night Navigator 
 
 > A safety-aware routing backend for Bengaluru that ranks routes by **psychological safety**, not just speed.
 
@@ -145,16 +145,16 @@ Evaluated on a **50k edge sample** with **3-fold stratified cross-validation**:
 | RandomForest | 0.8663 | 0.8667 | 0.7948 | 0.7016 | 0.7453 | 0.1475 |
 | LogisticRegression | 0.8599 | 0.8600 | 0.8199 | 0.6413 | 0.7197 | 0.1533 |
 
-### Target Thresholds — All Passed ✅
+### Target Thresholds — All Passed 
 
 | Metric | Target | Achieved | Status |
 |--------|--------|----------|--------|
-| CV AUC | > 0.80 | 0.8705 | ✅ Pass |
-| Train AUC | > 0.82 | 0.8713 | ✅ Pass |
-| Precision | > 0.75 | 0.7832 | ✅ Pass |
-| Recall | > 0.70 | 0.7299 | ✅ Pass |
-| F1 | > 0.74 | 0.7556 | ✅ Pass |
-| Brier Score | < 0.20 | 0.1440 | ✅ Pass |
+| CV AUC | > 0.80 | 0.8705 |  Pass |
+| Train AUC | > 0.82 | 0.8713 |  Pass |
+| Precision | > 0.75 | 0.7832 |  Pass |
+| Recall | > 0.70 | 0.7299 |  Pass |
+| F1 | > 0.74 | 0.7556 |  Pass |
+| Brier Score | < 0.20 | 0.1440 |  Pass |
 
 ---
 
@@ -287,14 +287,3 @@ fear-free-navigator/
 └── README.md
 ```
 
----
-
-## Interview Notes
-
-**On the AUC score:** The GBM achieves strong AUC (0.87) because the 22 features encode genuine physical safety properties of Bengaluru's road network — safe POI density (Δ=−0.04 in ablation), dead-end topology (Δ=−0.026), and road type structure reflect real-world risk factors. The model generalises these proxy labels to all 392k edges across 12 time bands.
-
-**On CSS pre-computation:** Scoring 393k edges × 12 time bands = 4.7M predictions **offline** means zero ML inference at query time. The API loads the cache at startup as an in-memory dictionary and routes purely with Dijkstra — latency is bounded by graph traversal, not ML compute. This keeps response time under 200ms.
-
-**On the bi-objective cost function:** `cost = α·travel_time + β·(1−CSS)`. The three tiers vary (α, β) to expose different points on the safety–speed Pareto frontier. The demo shows the balanced route crosses one unsafe segment that the safety-dominant tiers route around entirely, illustrating the real trade-off the system navigates.
-
-**On feature design:** The interaction terms (`night_x_safe_poi`, `night_x_road`, etc.) were included because safety dynamics change non-linearly at night — a busy street at noon is very different from the same street at midnight. The ablation confirms temporal features provide independent signal (Δ=−0.0023 AUC).
