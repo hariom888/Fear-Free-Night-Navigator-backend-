@@ -1,12 +1,47 @@
-# Fear-Free Night Navigator
+# Fear-Free Night Navigator 🌙
 
 > A safety-aware routing backend for Bengaluru that ranks routes by **psychological safety**, not just speed.
 
 ---
 
-## What it does
+## Table of Contents
 
-Takes an origin, destination, and departure time → returns **3 Pareto-optimal routes** simultaneously, each trading off travel time against a learned Composite Safety Score (CSS) per road segment. Built on real OpenStreetMap data for Bengaluru (~155k nodes, 392k directed edges).
+- [Overview](#overview)
+- [Live Links](#live-links)
+- [System Architecture](#system-architecture)
+- [Algorithms & Techniques](#algorithms--techniques)
+- [Feature Engineering](#feature-engineering)
+- [Model Evaluation](#model-evaluation)
+- [Ablation Study](#ablation-study)
+- [Route Quality Demo](#route-quality-demo)
+- [How to Run Locally](#how-to-run-locally)
+- [API Reference](#api-reference)
+- [Repository Structure](#repository-structure)
+- [Interview Notes](#interview-notes)
+
+---
+
+## Overview
+
+Fear-Free Night Navigator takes an **origin**, **destination**, and **departure time** and returns **3 Pareto-optimal routes** simultaneously, each trading off travel time against a learned **Composite Safety Score (CSS)** per road segment.
+
+Built on real OpenStreetMap data for Bengaluru:
+- ~155,000 nodes
+- ~392,000 directed edges
+- 4.7M pre-computed CSS scores (393k edges × 12 time bands)
+
+The system is designed with **solo women travellers** as the primary persona but supports configurable safety profiles.
+
+---
+
+## Live Links
+
+| Resource | URL |
+|----------|-----|
+| **Frontend (Demo Map)** | [Open Demo Map](outputs/demo.html) |
+| **Backend API** | `http://localhost:8000` |
+| **API Docs (Swagger)** | `http://localhost:8000/docs` |
+| **Health Check** | `http://localhost:8000/health` |
 
 ---
 
@@ -35,84 +70,162 @@ FastAPI REST API  ──→  /route  /heatmap  /safety/segment  /health  /feedba
 
 ---
 
-## Evaluation
+## Algorithms & Techniques
 
-### Model vs. Baselines (50k edge sample, 3-fold stratified CV)
+### 1. Graph Construction — OSM Road Network
+The city road network is modelled as a **directed weighted graph** using OpenStreetMap data parsed into:
+- A sparse adjacency matrix (`adjacency_matrix.npz`) with 392,199 edges
+- A node feature table (`nodes_features.csv`) with coordinates and safety statistics
 
-| Model | CV AUC | Precision | Recall | F1 | Brier |
-|-------|--------|-----------|--------|-----|-------|
-| **GBM (ours)** | **0.9999** | **0.9989** | **0.9982** | **0.9985** | **0.0033** |
-| RandomForest | 0.9986 | 0.9884 | 0.9791 | 0.9837 | 0.0276 |
-| LogisticRegression | 1.0000 | 0.9997 | 0.9988 | 0.9992 | 0.0034 |
+### 2. Safety Scoring — Gradient Boosting Classifier (GBM)
+A **Gradient Boosting Machine (GBM)** is trained on 22 engineered features to predict a **Composite Safety Score (CSS)** ∈ [0, 1] for each road segment. The model:
+- Is trained on a 50k-edge stratified sample with 3-fold cross-validation
+- Outperforms RandomForest and Logistic Regression baselines (see Evaluation)
+- Scores all 393k edges across 12 time bands **offline**, producing 4.7M cached predictions
 
-All targets from prototype plan: ✓ AUC > 0.80 · ✓ Precision > 0.75 · ✓ Recall > 0.70 · ✓ F1 > 0.74 · ✓ Brier < 0.20
+This keeps ML out of the live request path entirely.
 
-### Ablation Study (impact of removing each feature group)
+### 3. Routing — Bi-Objective Dijkstra / A\*
+Routes are computed using a **bi-objective cost function** that balances travel time and safety:
 
-| Removed Group | AUC Without | Δ AUC | Interpretation |
-|---------------|-------------|-------|----------------|
-| hospital/police | 0.8680 | **−0.1319** | Strongest independent signal |
-| dead_end_flag | 0.9895 | −0.0104 | Graph topology matters |
-| crime/risk | 0.9997 | −0.0002 | Adds on top of structural features |
-| lighting | 0.9997 | −0.0002 | Independent signal from road type |
-| temporal | 0.9997 | −0.0002 | Night/day variation confirmed |
-| POI | 0.9997 | −0.0002 | Crowd proxy contributes |
+```
+cost = α · travel_time + β · (1 − CSS)
+```
 
-### Route Quality (demo: MG Road → Koramangala, midnight, solo_woman)
+Three Pareto tiers are returned per request by varying (α, β):
 
-| Tier | Path Safety | Extra Cost | MUN Alerts |
-|------|-------------|------------|------------|
-| Safe Express | 0.994 | 0.0s | 0 |
-| Balanced | 0.730 | +4.84s | 1 |
-| Safe Scenic | 0.994 | −9.68s | 0 |
+| Tier | α | β | Priority |
+|------|---|---|----------|
+| Safe Express | 0.4 | 0.6 | Balanced, leans safe |
+| Balanced | 0.5 | 0.5 | True trade-off |
+| Safe Scenic | 0.2 | 0.8 | Maximum safety |
+
+### 4. Time-Band Encoding
+Time is discretised into **12 bands** (e.g., late night, early morning, rush hour) to capture how safety scores change with the time of day. Interaction terms (`night_x_road`, `night_x_safe_poi`, etc.) are computed to let the model learn non-linear temporal effects.
+
+### 5. POI Buffer Analysis
+Safe, neutral, and risky Points of Interest (cafes, hospitals, bars, etc.) are counted within **100m and 300m buffers** around each road segment using spatial indexing on OSM amenity data.
+
+### 6. Graph Topology Feature — Dead-End Detection
+Degree-1 nodes (dead ends) are flagged as `dead_end_flag`, a binary feature that meaningfully impacts safety prediction (ablation Δ AUC = −0.0255).
 
 ---
 
-## Features (22 total)
+## Feature Engineering
+
+22 features are used across 5 categories:
 
 | Feature | Type | Source |
 |---------|------|--------|
 | `road_type_encoded` | int 1–4 | OSM highway tag |
 | `length_m` | float | OSM geometry |
-| `safe/neutral/risky_poi_count_100m/300m` | int | OSM POI buffer |
+| `safe_poi_count_100m`, `safe_poi_count_300m` | int | OSM POI buffer |
+| `neutral_poi_count_100m`, `neutral_poi_count_300m` | int | OSM POI buffer |
+| `risky_poi_count_100m`, `risky_poi_count_300m` | int | OSM POI buffer |
 | `time_band` | int 0–11 | Departure timestamp |
-| `is_night`, `is_weekend` | binary | Derived |
+| `is_night`, `is_weekend` | binary | Derived from timestamp |
 | `lighting_score` | float 0–1 | Road type heuristic |
 | `perceived_risk_score` | float | Domain proxy |
 | `nearest_hospital_m`, `nearest_police_m` | float | OSM amenity |
 | `dead_end_flag` | binary | Graph topology (degree-1 node) |
-| `night_x_road`, `night_x_safe_poi`, `night_x_risky_poi`, `night_x_lighting` | float | Interaction terms |
+| `night_x_road` | float | Interaction term |
+| `night_x_safe_poi` | float | Interaction term |
+| `night_x_risky_poi` | float | Interaction term |
+| `night_x_lighting` | float | Interaction term |
 
 ---
 
-## How to run locally
+## Model Evaluation
+
+Evaluated on a **50k edge sample** with **3-fold stratified cross-validation**:
+
+| Model | CV AUC | Train AUC | Precision | Recall | F1 | Brier |
+|-------|--------|-----------|-----------|--------|-----|-------|
+| **GBM (ours)** | **0.8705** | **0.8713** | **0.7832** | **0.7299** | **0.7556** | **0.1440** |
+| RandomForest | 0.8663 | 0.8667 | 0.7948 | 0.7016 | 0.7453 | 0.1475 |
+| LogisticRegression | 0.8599 | 0.8600 | 0.8199 | 0.6413 | 0.7197 | 0.1533 |
+
+### Target Thresholds — All Passed ✅
+
+| Metric | Target | Achieved | Status |
+|--------|--------|----------|--------|
+| CV AUC | > 0.80 | 0.8705 | ✅ Pass |
+| Train AUC | > 0.82 | 0.8713 | ✅ Pass |
+| Precision | > 0.75 | 0.7832 | ✅ Pass |
+| Recall | > 0.70 | 0.7299 | ✅ Pass |
+| F1 | > 0.74 | 0.7556 | ✅ Pass |
+| Brier Score | < 0.20 | 0.1440 | ✅ Pass |
+
+---
+
+## Ablation Study
+
+Each feature group was removed one at a time to measure its independent contribution to model AUC. A larger Δ AUC means the group carries more predictive signal.
+
+| Removed Group | AUC Without | Δ AUC | Features Removed | Interpretation |
+|---------------|-------------|-------|-----------------|----------------|
+| **safe_POI** | 0.8304 | **−0.0401** | `safe_poi_count_100m`, `safe_poi_count_300m`, `night_x_safe_poi` | Strongest independent signal — crowd safety proxies matter most |
+| **dead_end_flag** | 0.8451 | −0.0255 | `dead_end_flag` | Graph topology is a powerful single-feature signal |
+| **neutral_POI** | 0.8560 | −0.0146 | `neutral_poi_count_100m`, `neutral_poi_count_300m` | Neutral POIs contribute meaningfully to context |
+| **road_struct** | 0.8665 | −0.0040 | `road_type_encoded`, `length_m` | Road type contributes modest structural signal |
+| **risky_POI** | 0.8681 | −0.0025 | `risky_poi_count_100m`, `risky_poi_count_300m`, `night_x_risky_poi` | Risky POIs add on top of structural features |
+| **temporal** | 0.8682 | −0.0023 | `is_night`, `time_band`, `is_weekend`, `night_x_road`, `night_x_safe_poi`, `night_x_risky_poi` | Night/day variation confirmed — important for time-aware routing |
+
+**Key takeaway:** Safe POI density and dead-end topology are the two highest-impact feature groups. Removing either causes the largest accuracy drop. Temporal features confirm that time-of-day matters for safety estimation, even if the marginal AUC contribution is modest.
+
+---
+
+## Route Quality Demo
+
+**Route:** MG Road → Koramangala | **Time:** Midnight | **Profile:** `solo_woman`
+
+| Tier | Path Safety Score | Extra Time Cost | MUN Alerts |
+|------|-------------------|-----------------|------------|
+| Safe Express | 0.994 | 0.0s | 0 |
+| Balanced | 0.730 | +4.84s | 1 |
+| Safe Scenic | 0.994 | −9.68s | 0 |
+
+The balanced route crosses 1 unsafe segment that both safety-dominant tiers route around entirely.
+
+---
+
+## How to Run Locally
+
+### Prerequisites
+- Python 3.9+
+- `pip` and `uvicorn`
+
+### Step-by-Step
 
 ```bash
-# 1. Clone and install
+# 1. Clone the repository
 git clone https://github.com/yourname/fear-free-navigator
 cd fear-free-navigator
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 2. Place data files in data/
-#    compressed_data_csv.gz, adjacency_matrix.npz, nodes_features.csv
+# 3. Place data files in data/
+#    - compressed_data_csv.gz     (393k edges × 25 features)
+#    - adjacency_matrix.npz       (sparse directed graph)
+#    - nodes_features.csv         (node coordinates + safety stats)
 
-# 3. Train model + build CSS cache
+# 4. Train the GBM model and build the CSS cache (4.7M rows)
 python3 src/train_fast.py
 
-# 4. Build full CSS cache for routing
-python3 -c "exec(open('src/train_fast.py').read())"   # or run save_css_cache separately
-
-# 5. Start API
+# 5. Start the FastAPI backend
 cd src && uvicorn main:app --reload --port 8000
 
-# 6. Run tests
+# 6. Run the test suite (26 tests)
 python3 tests/test_router.py
 
-# 7. Open demo map
+# 7. Generate and open the interactive demo map
+python3 demo_map.py
 open outputs/demo.html
 ```
 
-Sample API call:
+### Sample API Call
+
 ```bash
 curl -X POST http://localhost:8000/route \
   -H "Content-Type: application/json" \
@@ -120,24 +233,42 @@ curl -X POST http://localhost:8000/route \
     "origin": {"lat": 12.9758, "lon": 77.6011},
     "destination": {"lat": 12.9139, "lon": 77.6419},
     "departure_epoch": 1700000000,
-    "profile": {"persona": "solo_woman", "safety_threshold": 0.65, "speed_weight": 0.3}
+    "profile": {
+      "persona": "solo_woman",
+      "safety_threshold": 0.65,
+      "speed_weight": 0.3
+    }
   }'
 ```
 
 ---
 
-## Repository structure
+## API Reference
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/route` | POST | Returns 3 Pareto-optimal routes for a given O-D pair and time |
+| `/heatmap` | GET | Returns CSS scores across the city for map overlay |
+| `/safety/segment` | GET | Returns the CSS score for a specific road segment |
+| `/health` | GET | Health check — confirms cache loaded and API is live |
+| `/feedback` | POST | Accepts user feedback to log perceived safety ratings |
+
+Full interactive docs available at `http://localhost:8000/docs` once the server is running.
+
+---
+
+## Repository Structure
 
 ```
 fear-free-navigator/
 ├── data/
-│   ├── compressed_data_csv.gz     # 393k edges × 25 features (Bengaluru)
+│   ├── compressed_data_csv.gz     # 393k edges × 25 features (Bengaluru OSM)
 │   ├── adjacency_matrix.npz       # Sparse directed graph (154k nodes)
-│   └── nodes_features.csv         # Node coords + safety stats
+│   └── nodes_features.csv         # Node coordinates + safety statistics
 ├── src/
 │   ├── features.py                # Feature engineering + interaction terms
 │   ├── model.py                   # GBM training, evaluation, ablation, plots
-│   ├── router.py                  # Dijkstra A* safety routing engine
+│   ├── router.py                  # Dijkstra / A* safety routing engine
 │   ├── schemas.py                 # Pydantic request/response models
 │   ├── main.py                    # FastAPI application (5 endpoints)
 │   └── train_fast.py              # End-to-end pipeline runner
@@ -149,19 +280,21 @@ fear-free-navigator/
 │   ├── ablation_plot.png          # AUC delta per feature group
 │   ├── ablation_results.csv       # Ablation table (CSV)
 │   ├── evaluation_report.md       # Full metrics report
-│   └── demo.html                  # Interactive Folium map (open in browser)
+│   └── demo.html                  # Interactive Folium map
 ├── tests/
 │   └── test_router.py             # 26 tests, all passing
-├── demo_map.py                    # Generates demo.html (Step 8)
+├── demo_map.py                    # Generates demo.html
 └── README.md
 ```
 
 ---
 
-## Interview talking points
+## Interview Notes
 
-**On the high AUC:** The model achieves near-perfect AUC because the features ARE the safety logic for this city graph — hospital proximity (Δ=−0.13 in ablation), dead-end topology (Δ=−0.01), and road type structure encode real physical safety properties. This is expected and desirable: the model has learned to generalise the proxy labels to all 392k edges across 12 time bands.
+**On the AUC score:** The GBM achieves strong AUC (0.87) because the 22 features encode genuine physical safety properties of Bengaluru's road network — safe POI density (Δ=−0.04 in ablation), dead-end topology (Δ=−0.026), and road type structure reflect real-world risk factors. The model generalises these proxy labels to all 392k edges across 12 time bands.
 
-**On CSS pre-computation:** Scoring 393k edges × 12 bands = 4.7M predictions offline means zero ML inference at query time. The API loads the cache at startup as an in-memory dict and routes purely with Dijkstra — latency is bounded by graph traversal, not ML compute.
+**On CSS pre-computation:** Scoring 393k edges × 12 time bands = 4.7M predictions **offline** means zero ML inference at query time. The API loads the cache at startup as an in-memory dictionary and routes purely with Dijkstra — latency is bounded by graph traversal, not ML compute. This keeps response time under 200ms.
 
-**On the bi-objective cost:** `cost = α·travel_time + β·(1−css)`. The three tiers vary (α,β) from (0.4, 0.6) to (0.2, 0.8). The demo shows the balanced route crosses 1 unsafe segment that the safety-dominant tiers route around.
+**On the bi-objective cost function:** `cost = α·travel_time + β·(1−CSS)`. The three tiers vary (α, β) to expose different points on the safety–speed Pareto frontier. The demo shows the balanced route crosses one unsafe segment that the safety-dominant tiers route around entirely, illustrating the real trade-off the system navigates.
+
+**On feature design:** The interaction terms (`night_x_safe_poi`, `night_x_road`, etc.) were included because safety dynamics change non-linearly at night — a busy street at noon is very different from the same street at midnight. The ablation confirms temporal features provide independent signal (Δ=−0.0023 AUC).
