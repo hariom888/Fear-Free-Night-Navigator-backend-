@@ -150,13 +150,47 @@ def reconstruct_path(preds: np.ndarray, src: int, dst: int) -> list[int]:
 def build_cost_matrix(adj: sp.csr_matrix,
                       sorted_keys: np.ndarray, sorted_vals: np.ndarray,
                       n_nodes: int, band: int,
-                      alpha: float, beta: float) -> sp.csr_matrix:
-    """Build weighted cost matrix using CSR data directly — no tolil() copy."""
+                      alpha: float, beta: float,
+                      tier_name: str = "") -> sp.csr_matrix:
+    """
+    Build weighted cost matrix — with travel_time normalised to [0,1].
+
+    FIX: Previously travel_time was raw (range ~0.24-1.63) while (1-css) is
+    always [0,1]. This meant the safety term dominated 5-10x over speed,
+    making all three tiers converge on the same shortest path.
+    Normalising both to [0,1] makes alpha/beta weights meaningful.
+
+    Tier-specific edge penalties further diversify paths on sparse graphs.
+    """
     rows, cols = adj.nonzero()
-    data = adj.data.astype(np.float32).copy()
+    raw_tt = adj.data.astype(np.float32)
+
+    # Normalise travel_time to [0, 1] so it's on same scale as (1-css)
+    tt_min = float(raw_tt.min())
+    tt_max = float(raw_tt.max())
+    tt_range = (tt_max - tt_min) if tt_max > tt_min else 1.0
+    tt_norm = (raw_tt - tt_min) / tt_range
+
+    data = np.empty(len(rows), dtype=np.float32)
     for i, (r, c) in enumerate(zip(rows, cols)):
         css = css_lookup(sorted_keys, sorted_vals, int(r), int(c), band, n_nodes)
-        data[i] = alpha * float(adj.data[i]) + beta * (1.0 - css)
+        cost = alpha * tt_norm[i] + beta * (1.0 - css)
+
+        # Tier nudges to push routes apart on sparse graphs
+        if tier_name == "safe_express":
+            # Reward edges that are both safe AND fast
+            cost -= 0.08 * css * (1.0 - tt_norm[i])
+        elif tier_name == "balanced":
+            # Small penalty on cheapest-but-unsafe edges to open alternatives
+            if tt_norm[i] < 0.2 and css < 0.4:
+                cost += 0.05
+        elif tier_name == "safe_scenic":
+            # Hard penalty on unsafe edges — forces detour through safer streets
+            if css < 0.35:
+                cost += 0.25 * (0.35 - css)
+
+        data[i] = max(0.001, float(cost))
+
     return sp.csr_matrix((data, (rows, cols)), shape=adj.shape)
 
 
@@ -331,7 +365,7 @@ async def get_route(req: RouteRequest):
         beta  = max(beta_base, beta_floor)
         alpha = 1.0 - beta
 
-        H = build_cost_matrix(app.state.adj, sk, sv, n_nodes, time_band, alpha, beta)
+        H = build_cost_matrix(app.state.adj, sk, sv, n_nodes, time_band, alpha, beta, tier_name)
         dist_arr, preds = dijkstra(
             H, directed=True,
             indices=origin_idx,
@@ -427,6 +461,8 @@ async def heatmap(req: HeatmapRequest):
                 u=int(nodes_osmid[ui]),
                 v=vi,
                 css_score=round(float(sc), 4),
+                lat=round(float(lat_u), 6),
+                lon=round(float(lon_u), 6),
             ))
         if len(features) >= 2000:
             break

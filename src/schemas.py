@@ -67,6 +67,8 @@ class HeatmapFeature(BaseModel):
     u: int
     v: int
     css_score: float
+    lat: float
+    lon: float
 
 
 class HeatmapResponse(BaseModel):
