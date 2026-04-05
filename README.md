@@ -38,10 +38,10 @@ The system is designed with **solo women travellers** as the primary persona but
 
 | Resource | URL |
 |----------|-----|
-| **Frontend (Demo Map)** | [Open Demo Map](outputs/demo.html) |
-| **Backend API** | `http://localhost:8000` |
-| **API Docs (Swagger)** | `http://localhost:8000/docs` |
-| **Health Check** | `http://localhost:8000/health` |
+| **Frontend (Demo Map)** | `https://fear-free-navigator-frontend.vercel.app/` |
+| **Backend API** | `https://fear-free-navigator.onrender.com` |
+| **API Docs (Swagger)** | `https://fear-free-navigator.onrender.com/docs` |
+| **Health Check** | `https://fear-free-navigator.onrender.com/health` |
 
 ---
 
