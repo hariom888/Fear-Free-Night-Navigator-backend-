@@ -32,6 +32,8 @@ Built on real OpenStreetMap data for Bengaluru:
 
 The system is designed with **solo women travellers** as the primary persona but supports configurable safety profiles.
 
+⚡ **Production latency <200ms (excluding cold starts on free-tier hosting)**
+
 ---
 
 ## Live Links
@@ -42,6 +44,10 @@ The system is designed with **solo women travellers** as the primary persona but
 | **Backend API** | `https://fear-free-navigator.onrender.com` |
 | **API Docs (Swagger)** | `https://fear-free-navigator.onrender.com/docs` |
 | **Health Check** | `https://fear-free-navigator.onrender.com/health` |
+
+> ⚠️ **Note:** The backend is hosted on Render's free tier.  
+> The first request after inactivity may take **30–60 seconds** due to cold start.  
+> Subsequent requests are fast (~200ms).
 
 ---
 
